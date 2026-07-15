@@ -1,0 +1,27 @@
+stages:
+  - docker
+
+variables:
+  IMAGE_TAG: "$CI_COMMIT_SHORT_SHA"
+  DOCKER_TLS_CERTDIR: ""
+  DOCKER_DRIVER: overlay2
+  DOCKER_BUILDKIT: "1"
+
+# ---- BUILD DOCKER & PUSH TO ECR ----
+build-image:
+  stage: docker
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  before_script:
+    - apk add --no-cache aws-cli
+    - aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID"
+    - aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
+    - aws configure set region "$AWS_REGION"
+    - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REPOSITORY_URL
+  script:
+    - docker build --shm-size=2g -t $ECR_REPOSITORY_URL:$IMAGE_TAG -t $ECR_REPOSITORY_URL:latest .
+    - docker push $ECR_REPOSITORY_URL:$IMAGE_TAG
+    - docker push $ECR_REPOSITORY_URL:latest
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
