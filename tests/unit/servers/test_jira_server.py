@@ -1950,6 +1950,7 @@ async def test_get_project_fields_tool(jira_client, mock_jira_fetcher):
             "schema_type": "string",
             "custom": False,
             "issue_types": ["Bug", "Task"],
+            "required_for": ["Bug", "Task"],
         }
     ]
     mock_jira_fetcher.get_project_fields.return_value = mock_fields
@@ -1965,23 +1966,15 @@ async def test_get_project_fields_tool(jira_client, mock_jira_fetcher):
 
 
 @pytest.mark.anyio
-async def test_get_project_fields_tool_configuration_error(
-    jira_client, mock_jira_fetcher
-):
-    """Test jira_get_project_fields handles configuration errors."""
-    mock_jira_fetcher.get_project_fields.side_effect = ValueError(
-        "Jira client not configured"
-    )
+async def test_get_project_fields_tool_error_surfaces(jira_client, mock_jira_fetcher):
+    """Test jira_get_project_fields raises a tool error instead of returning []."""
+    mock_jira_fetcher.get_project_fields.side_effect = Exception("API error")
 
-    response = await jira_client.call_tool(
-        "jira_get_project_fields",
-        {"project_key": "TEST"},
-    )
-
-    data = json.loads(response.content[0].text)
-    assert data["success"] is False
-    assert data["project_key"] == "TEST"
-    assert "Configuration Error" in data["error"]
+    with pytest.raises(ToolError, match="API error"):
+        await jira_client.call_tool(
+            "jira_get_project_fields",
+            {"project_key": "TEST"},
+        )
 
 
 @pytest.mark.anyio

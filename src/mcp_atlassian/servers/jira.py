@@ -3276,31 +3276,16 @@ async def get_project_fields(
 
     Returns:
         JSON string with a list of fields: each {field_id, name, required,
-        schema_type, custom, issue_types}. Empty list if none / on error.
+        schema_type, custom, issue_types, required_for}. `required` is true only
+        when the field is required on all listed issue_types; use `required_for`
+        to see which issue types require it. Empty list if the project has no
+        issue types.
 
     Raises:
-        ValueError: If the Jira client is not configured or available.
+        ToolError: On any failure (auth, API, configuration).
     """
-    try:
-        jira = await get_jira_fetcher(ctx)
-        fields = jira.get_project_fields(project_key)
-    except (MCPAtlassianAuthenticationError, HTTPError, OSError, ValueError) as e:
-        error_message = ""
-        log_level = logging.ERROR
-        if isinstance(e, MCPAtlassianAuthenticationError):
-            error_message = f"Authentication/Permission Error: {str(e)}"
-        elif isinstance(e, OSError | HTTPError):
-            error_message = f"Network or API Error: {str(e)}"
-        elif isinstance(e, ValueError):
-            error_message = f"Configuration Error: {str(e)}"
-        logger.log(
-            log_level, f"get_project_fields failed for '{project_key}': {error_message}"
-        )
-        return json.dumps(
-            {"success": False, "error": error_message, "project_key": project_key},
-            indent=2,
-            ensure_ascii=False,
-        )
+    jira = await get_jira_fetcher(ctx)
+    fields = jira.get_project_fields(project_key)
     return json.dumps(fields, indent=2, ensure_ascii=False)
 
 

@@ -521,11 +521,11 @@ def test_get_project_issue_types_empty_response(projects_mixin: ProjectsMixin):
 
 
 def test_get_project_issue_types_exception(projects_mixin: ProjectsMixin):
-    """Test get_project_issue_types method with exception."""
+    """Test get_project_issue_types propagates API errors."""
     projects_mixin.jira.issue_createmeta_issuetypes.side_effect = Exception("API error")
 
-    result = projects_mixin.get_project_issue_types("PROJ1")
-    assert result == []
+    with pytest.raises(Exception, match="API error"):
+        projects_mixin.get_project_issue_types("PROJ1")
     projects_mixin.jira.issue_createmeta_issuetypes.assert_called_once()
 
 
@@ -638,12 +638,11 @@ def test_get_create_fields_supports_legacy_mapping(projects_mixin: ProjectsMixin
 
 
 def test_get_create_fields_exception(projects_mixin: ProjectsMixin):
-    """Test get_create_fields returns an empty list on API errors."""
+    """Test get_create_fields propagates API errors."""
     projects_mixin.jira.issue_createmeta_fieldtypes.side_effect = Exception("API error")
 
-    result = projects_mixin.get_create_fields("PROJ1", "10000")
-
-    assert result == []
+    with pytest.raises(Exception, match="API error"):
+        projects_mixin.get_create_fields("PROJ1", "10000")
 
 
 def test_get_project_fields_merges_issue_type_fields(projects_mixin: ProjectsMixin):
@@ -705,10 +704,11 @@ def test_get_project_fields_merges_issue_type_fields(projects_mixin: ProjectsMix
         {
             "field_id": "summary",
             "name": "Summary",
-            "required": True,
+            "required": False,
             "schema_type": "string",
             "custom": False,
             "issue_types": ["Bug", "Task"],
+            "required_for": ["Bug"],
         },
         {
             "field_id": "customfield_10010",
@@ -717,6 +717,7 @@ def test_get_project_fields_merges_issue_type_fields(projects_mixin: ProjectsMix
             "schema_type": "user",
             "custom": True,
             "issue_types": ["Bug"],
+            "required_for": [],
         },
         {
             "field_id": "priority",
@@ -725,6 +726,7 @@ def test_get_project_fields_merges_issue_type_fields(projects_mixin: ProjectsMix
             "schema_type": "priority",
             "custom": False,
             "issue_types": ["Bug"],
+            "required_for": [],
         },
     ]
     projects_mixin.jira.issue_createmeta_fieldtypes.assert_has_calls(
@@ -736,10 +738,60 @@ def test_get_project_fields_merges_issue_type_fields(projects_mixin: ProjectsMix
     )
 
 
-def test_get_project_fields_uses_required_from_any_issue_type(
+def test_get_project_fields_required_only_when_required_on_all_issue_types(
     projects_mixin: ProjectsMixin,
 ):
-    """Test merged fields are required if any issue type requires them."""
+    """Required on a subset of types is not required overall; see required_for."""
+    projects_mixin.get_project_issue_types = MagicMock(  # type: ignore[method-assign]
+        return_value=[
+            {"id": "10000", "name": "Sottotask"},
+            {"id": "10001", "name": "Story"},
+        ]
+    )
+
+    def entry(field_id: str, required: bool) -> dict:
+        return {
+            "fieldId": field_id,
+            "name": field_id,
+            "required": required,
+            "schema": {"type": "string"},
+        }
+
+    projects_mixin.jira.issue_createmeta_fieldtypes.side_effect = [
+        {
+            "startAt": 0,
+            "total": 2,
+            "values": [entry("parent", True), entry("summary", True)],
+        },
+        {
+            "startAt": 0,
+            "total": 2,
+            "values": [entry("parent", False), entry("summary", True)],
+        },
+    ]
+
+    by_id = {f["field_id"]: f for f in projects_mixin.get_project_fields("PROJ1")}
+
+    assert by_id["parent"]["required"] is False
+    assert by_id["parent"]["required_for"] == ["Sottotask"]
+    assert by_id["summary"]["required"] is True
+    assert by_id["summary"]["required_for"] == ["Sottotask", "Story"]
+    assert by_id["summary"]["issue_types"] == ["Sottotask", "Story"]
+
+
+def test_get_project_fields_exception(projects_mixin: ProjectsMixin):
+    """Test get_project_fields propagates API errors."""
+    projects_mixin.get_project_issue_types = MagicMock(  # type: ignore[method-assign]
+        return_value=[{"id": "10000", "name": "Bug"}]
+    )
+    projects_mixin.jira.issue_createmeta_fieldtypes.side_effect = Exception("API error")
+
+    with pytest.raises(Exception, match="API error"):
+        projects_mixin.get_project_fields("PROJ1")
+
+
+def test_get_project_fields_cloud_fields_list_shape(projects_mixin: ProjectsMixin):
+    """Cloud returns a `fields` list (no `values`); required_for merges across types."""
     projects_mixin.get_project_issue_types = MagicMock(  # type: ignore[method-assign]
         return_value=[
             {"id": "10000", "name": "Bug"},
@@ -749,11 +801,12 @@ def test_get_project_fields_uses_required_from_any_issue_type(
     projects_mixin.jira.issue_createmeta_fieldtypes.side_effect = [
         {
             "startAt": 0,
+            "maxResults": 50,
             "total": 1,
-            "values": [
+            "fields": [
                 {
-                    "fieldId": "customfield_10010",
-                    "name": "Customer",
+                    "fieldId": "assignee",
+                    "name": "Assignee",
                     "required": False,
                     "schema": {"type": "user"},
                 }
@@ -761,11 +814,12 @@ def test_get_project_fields_uses_required_from_any_issue_type(
         },
         {
             "startAt": 0,
+            "maxResults": 50,
             "total": 1,
-            "values": [
+            "fields": [
                 {
-                    "fieldId": "customfield_10010",
-                    "name": "Customer",
+                    "fieldId": "assignee",
+                    "name": "Assignee",
                     "required": True,
                     "schema": {"type": "user"},
                 }
@@ -773,22 +827,42 @@ def test_get_project_fields_uses_required_from_any_issue_type(
         },
     ]
 
-    result = projects_mixin.get_project_fields("PROJ1")
+    result = projects_mixin.get_project_fields("MED")
 
-    assert result[0]["required"] is True
+    assert len(result) == 1
+    assert result[0]["field_id"] == "assignee"
+    assert result[0]["schema_type"] == "user"
+    assert result[0]["required"] is False
+    assert result[0]["required_for"] == ["Task"]
     assert result[0]["issue_types"] == ["Bug", "Task"]
 
 
-def test_get_project_fields_exception(projects_mixin: ProjectsMixin):
-    """Test get_project_fields returns empty list on API errors."""
+def test_get_project_fields_no_issue_types(projects_mixin: ProjectsMixin):
+    """A project with no issue types yields an empty list, not an error."""
     projects_mixin.get_project_issue_types = MagicMock(  # type: ignore[method-assign]
-        return_value=[{"id": "10000", "name": "Bug"}]
+        return_value=[]
     )
-    projects_mixin.jira.issue_createmeta_fieldtypes.side_effect = Exception("API error")
 
-    result = projects_mixin.get_project_fields("PROJ1")
+    assert projects_mixin.get_project_fields("PROJ1") == []
 
-    assert result == []
+
+def test_get_project_fields_second_issue_type_failure_propagates(
+    projects_mixin: ProjectsMixin,
+):
+    """A failure on a later issue type fails the whole call (no partial result)."""
+    projects_mixin.get_project_issue_types = MagicMock(  # type: ignore[method-assign]
+        return_value=[
+            {"id": "10000", "name": "Bug"},
+            {"id": "10001", "name": "Task"},
+        ]
+    )
+    projects_mixin.jira.issue_createmeta_fieldtypes.side_effect = [
+        {"total": 1, "fields": [{"fieldId": "summary", "name": "Summary"}]},
+        Exception("API error"),
+    ]
+
+    with pytest.raises(Exception, match="API error"):
+        projects_mixin.get_project_fields("PROJ1")
 
 
 def test_get_project_issues_count(projects_mixin: ProjectsMixin):

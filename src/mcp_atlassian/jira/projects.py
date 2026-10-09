@@ -12,6 +12,27 @@ from .protocols import SearchOperationsProto
 logger = logging.getLogger("mcp-jira")
 
 
+def _createmeta_field_entries(meta: dict[str, Any]) -> list[Any]:
+    """Return the field entries of a createmeta fieldtypes page.
+
+    Handles ``values`` (paginated), and the ``fields`` key as either a list
+    (Jira Cloud) or a dict keyed by field id (legacy).
+    """
+    values = meta.get("values", [])
+    if isinstance(values, list) and values:
+        return values
+    fields = meta.get("fields", [])
+    if isinstance(fields, dict):
+        return [
+            {"fieldId": field_id, **field_data}
+            for field_id, field_data in fields.items()
+            if isinstance(field_data, dict)
+        ]
+    if isinstance(fields, list):
+        return fields
+    return []
+
+
 class ProjectsMixin(JiraClient, SearchOperationsProto):
     """Mixin for Jira project operations.
 
@@ -319,60 +340,56 @@ class ProjectsMixin(JiraClient, SearchOperationsProto):
 
         Returns:
             List of issue type data dictionaries
+
+        Raises:
+            Exception: Any API or response-shape error propagates.
         """
-        try:
-            issue_types: list[dict[str, Any]] = []
-            start_at = 0
-            page_size = 50
+        issue_types: list[dict[str, Any]] = []
+        start_at = 0
+        page_size = 50
 
-            while True:
-                meta = self.jira.issue_createmeta_issuetypes(
-                    project=project_key,
-                    start=start_at,
-                    limit=page_size,
-                )
-                if not isinstance(meta, dict):
-                    msg = (
-                        "Unexpected return value type from "
-                        f"`jira.issue_createmeta_issuetypes`: {type(meta)}"
-                    )
-                    logger.error(msg)
-                    raise TypeError(msg)
-
-                # Jira uses both keys across Cloud and Server/DC versions.
-                page = meta.get("values", [])
-                if not isinstance(page, list) or not page:
-                    page = meta.get("issueTypes", [])
-
-                if not isinstance(page, list) or not page:
-                    # Fallback for the legacy, non-paginated response format.
-                    projects = meta.get("projects", [])
-                    if isinstance(projects, list) and projects:
-                        first_project = projects[0]
-                        if isinstance(first_project, dict):
-                            page = first_project.get("issuetypes", [])
-
-                if not isinstance(page, list):
-                    page = []
-                issue_types.extend(item for item in page if isinstance(item, dict))
-
-                total = meta.get("total")
-                start_at += len(page)
-                if (
-                    not page
-                    or meta.get("isLast") is True
-                    or not isinstance(total, int)
-                    or start_at >= total
-                ):
-                    break
-
-            return issue_types
-
-        except Exception as e:
-            logger.error(
-                f"Error getting issue types for project {project_key}: {str(e)}"
+        while True:
+            meta = self.jira.issue_createmeta_issuetypes(
+                project=project_key,
+                start=start_at,
+                limit=page_size,
             )
-            return []
+            if not isinstance(meta, dict):
+                msg = (
+                    "Unexpected return value type from "
+                    f"`jira.issue_createmeta_issuetypes`: {type(meta)}"
+                )
+                logger.error(msg)
+                raise TypeError(msg)
+
+            # Jira uses both keys across Cloud and Server/DC versions.
+            page = meta.get("values", [])
+            if not isinstance(page, list) or not page:
+                page = meta.get("issueTypes", [])
+
+            if not isinstance(page, list) or not page:
+                # Fallback for the legacy, non-paginated response format.
+                projects = meta.get("projects", [])
+                if isinstance(projects, list) and projects:
+                    first_project = projects[0]
+                    if isinstance(first_project, dict):
+                        page = first_project.get("issuetypes", [])
+
+            if not isinstance(page, list):
+                page = []
+            issue_types.extend(item for item in page if isinstance(item, dict))
+
+            total = meta.get("total")
+            start_at += len(page)
+            if (
+                not page
+                or meta.get("isLast") is True
+                or not isinstance(total, int)
+                or start_at >= total
+            ):
+                break
+
+        return issue_types
 
     def get_create_fields(
         self, project_key: str, issue_type_id: str
@@ -389,59 +406,44 @@ class ProjectsMixin(JiraClient, SearchOperationsProto):
         Returns:
             List of field metadata dicts with fieldId, name, required,
             schema, etc.
+
+        Raises:
+            Exception: Any API or response-shape error propagates.
         """
-        try:
-            fields: list[dict[str, Any]] = []
-            start_at = 0
-            page_size = 50
+        fields: list[dict[str, Any]] = []
+        start_at = 0
+        page_size = 50
 
-            while True:
-                meta = self.jira.issue_createmeta_fieldtypes(
-                    project=project_key,
-                    issue_type_id=issue_type_id,
-                    start=start_at,
-                    limit=page_size,
-                )
-                if not isinstance(meta, dict):
-                    msg = (
-                        "Unexpected return type from "
-                        f"issue_createmeta_fieldtypes: {type(meta)}"
-                    )
-                    logger.error(msg)
-                    raise TypeError(msg)
-
-                page = meta.get("values", [])
-                if not isinstance(page, list) or not page:
-                    legacy_fields = meta.get("fields", [])
-                    if isinstance(legacy_fields, dict):
-                        page = [
-                            {"fieldId": field_id, **field_data}
-                            for field_id, field_data in legacy_fields.items()
-                            if isinstance(field_data, dict)
-                        ]
-                    elif isinstance(legacy_fields, list):
-                        page = legacy_fields
-                    else:
-                        page = []
-
-                fields.extend(item for item in page if isinstance(item, dict))
-
-                total = meta.get("total")
-                start_at += len(page)
-                if (
-                    not page
-                    or meta.get("isLast") is True
-                    or not isinstance(total, int)
-                    or start_at >= total
-                ):
-                    break
-
-            return fields
-        except Exception as e:
-            logger.error(
-                f"Error getting create fields for {project_key}/{issue_type_id}: {e}"
+        while True:
+            meta = self.jira.issue_createmeta_fieldtypes(
+                project=project_key,
+                issue_type_id=issue_type_id,
+                start=start_at,
+                limit=page_size,
             )
-            return []
+            if not isinstance(meta, dict):
+                msg = (
+                    "Unexpected return type from "
+                    f"issue_createmeta_fieldtypes: {type(meta)}"
+                )
+                logger.error(msg)
+                raise TypeError(msg)
+
+            page = _createmeta_field_entries(meta)
+
+            fields.extend(item for item in page if isinstance(item, dict))
+
+            total = meta.get("total")
+            start_at += len(page)
+            if (
+                not page
+                or meta.get("isLast") is True
+                or not isinstance(total, int)
+                or start_at >= total
+            ):
+                break
+
+        return fields
 
     def get_project_fields(self, project_key: str) -> list[dict[str, Any]]:
         """
@@ -453,64 +455,77 @@ class ProjectsMixin(JiraClient, SearchOperationsProto):
         type (``/rest/api/2/issue/createmeta/{project}/issuetypes/{issueTypeId}``)
         and merges the results, recording on which issue types each field appears.
 
+        ``required`` is True only when the field is required on every issue type
+        in ``issue_types``; ``required_for`` lists the issue types that require it.
+
         Args:
             project_key: The project key
 
         Returns:
             List of field dicts: {field_id, name, required, schema_type, custom,
-            issue_types: [names]}. Empty list on error.
-        """
-        try:
-            issue_types = self.get_project_issue_types(project_key)
-            merged: dict[str, dict[str, Any]] = {}
-            for it in issue_types:
-                it_id = it.get("id")
-                it_name = it.get("name", "")
-                if not it_id:
-                    continue
-                start_at = 0
-                while True:
-                    meta = self.jira.issue_createmeta_fieldtypes(
-                        project=project_key,
-                        issue_type_id=it_id,
-                        start=start_at,
-                        limit=50,
-                    )
-                    if not isinstance(meta, dict):
-                        break
-                    entries = meta.get("values", [])
-                    for entry in entries:
-                        if not isinstance(entry, dict):
-                            continue
-                        fid = entry.get("fieldId") or entry.get("key")
-                        if not fid:
-                            continue
-                        rec = merged.get(fid)
-                        if rec is None:
-                            schema = entry.get("schema") or {}
-                            rec = {
-                                "field_id": fid,
-                                "name": entry.get("name", ""),
-                                "required": bool(entry.get("required", False)),
-                                "schema_type": schema.get("type", ""),
-                                "custom": bool(schema.get("custom")),
-                                "issue_types": [],
-                            }
-                            merged[fid] = rec
-                        elif entry.get("required", False):
-                            rec["required"] = True
-                        if it_name and it_name not in rec["issue_types"]:
-                            rec["issue_types"].append(it_name)
-                    # Paginate: stop when we've seen all values.
-                    total = meta.get("total", 0)
-                    start_at += len(entries)
-                    if not entries or start_at >= total:
-                        break
-            return list(merged.values())
+            issue_types: [names], required_for: [names]}. Empty list if the project has no issue types.
 
-        except Exception as e:
-            logger.error(f"Error getting fields for project {project_key}: {str(e)}")
-            return []
+        Raises:
+            Exception: Any API error on any issue type propagates (no partial
+            results).
+        """
+        issue_types = self.get_project_issue_types(project_key)
+        merged: dict[str, dict[str, Any]] = {}
+        for it in issue_types:
+            it_id = it.get("id")
+            it_name = it.get("name", "")
+            if not it_id:
+                continue
+            start_at = 0
+            while True:
+                meta = self.jira.issue_createmeta_fieldtypes(
+                    project=project_key,
+                    issue_type_id=it_id,
+                    start=start_at,
+                    limit=50,
+                )
+                if not isinstance(meta, dict):
+                    msg = (
+                        "Unexpected return type from "
+                        f"issue_createmeta_fieldtypes: {type(meta)}"
+                    )
+                    logger.error(msg)
+                    raise TypeError(msg)
+                entries = _createmeta_field_entries(meta)
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    fid = entry.get("fieldId") or entry.get("key")
+                    if not fid:
+                        continue
+                    rec = merged.get(fid)
+                    if rec is None:
+                        schema = entry.get("schema") or {}
+                        rec = {
+                            "field_id": fid,
+                            "name": entry.get("name", ""),
+                            "required": False,
+                            "schema_type": schema.get("type", ""),
+                            "custom": bool(schema.get("custom")),
+                            "issue_types": [],
+                            "required_for": [],
+                        }
+                        merged[fid] = rec
+                    if it_name and it_name not in rec["issue_types"]:
+                        rec["issue_types"].append(it_name)
+                    is_required = bool(entry.get("required", False))
+                    if is_required and it_name not in rec["required_for"]:
+                        rec["required_for"].append(it_name)
+                # Paginate: stop when we've seen all values.
+                total = meta.get("total")
+                start_at += len(entries)
+                if not entries or not isinstance(total, int) or start_at >= total:
+                    break
+        for rec in merged.values():
+            rec["required"] = bool(rec["required_for"]) and (
+                rec["required_for"] == rec["issue_types"]
+            )
+        return list(merged.values())
 
     def get_project_issues_count(self, project_key: str) -> int:
         """
