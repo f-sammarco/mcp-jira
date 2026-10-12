@@ -142,3 +142,56 @@ def test_handle_auth_errors_passes_through_no_response():
 
     with pytest.raises(HTTPError):
         Svc().fail()
+
+
+# --- handle_tool_errors HTTPError detail ---
+
+
+def _http_error_with_response(
+    status_code: int, reason: str, text: str, headers: dict | None = None
+) -> HTTPError:
+    response = MagicMock()
+    response.status_code = status_code
+    response.reason = reason
+    response.text = text
+    response.headers = headers or {}
+    return HTTPError(response=response)
+
+
+async def _tool_error_text(error: Exception) -> str:
+    @handle_tool_errors
+    async def failing_tool():
+        raise error
+
+    with pytest.raises(ToolError) as exc:
+        await failing_tool()
+    return str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_handle_tool_errors_http_error_includes_status_and_body():
+    err = _http_error_with_response(503, "Service Unavailable", " upstream\n down ")
+    text = await _tool_error_text(err)
+    assert text == (
+        "Error calling tool 'failing_tool': HTTP 503 Service Unavailable: upstream down"
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_tool_errors_http_error_retry_after_and_empty_body():
+    err = _http_error_with_response(429, "Too Many Requests", "", {"Retry-After": "30"})
+    text = await _tool_error_text(err)
+    assert text.endswith("HTTP 429 Too Many Requests; Retry-After=30")
+
+
+@pytest.mark.asyncio
+async def test_handle_tool_errors_http_error_truncates_body():
+    err = _http_error_with_response(500, "Server Error", "x" * 2000)
+    text = await _tool_error_text(err)
+    assert text.endswith(": " + "x" * 500)
+
+
+@pytest.mark.asyncio
+async def test_handle_tool_errors_http_error_without_response_falls_back():
+    text = await _tool_error_text(HTTPError())
+    assert text == "Error calling tool 'failing_tool': HTTPError"

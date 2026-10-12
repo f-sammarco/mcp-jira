@@ -15,6 +15,32 @@ logger = logging.getLogger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
+HTTP_ERROR_BODY_MAX_CHARS = 500
+HTTP_ERROR_PREFIX_FORMAT = "HTTP {status} {reason}"
+HTTP_ERROR_BODY_SEPARATOR = ": "
+HTTP_ERROR_RETRY_AFTER_FORMAT = "; Retry-After={value}"
+
+
+def _describe_error(error: Exception) -> str:
+    """Build the error text; HTTPError gets status, body snippet, Retry-After.
+
+    Format is parsed by clients: "HTTP <3-digit status>" and "Retry-After=<seconds>".
+    """
+    response = getattr(error, "response", None)
+    if not isinstance(error, HTTPError) or response is None:
+        return str(error).strip() or type(error).__name__
+    reason = response.reason or ""
+    detail = HTTP_ERROR_PREFIX_FORMAT.format(
+        status=response.status_code, reason=reason
+    ).strip()
+    body = " ".join((response.text or "").split())[:HTTP_ERROR_BODY_MAX_CHARS]
+    if body:
+        detail += HTTP_ERROR_BODY_SEPARATOR + body
+    retry_after = response.headers.get("Retry-After")
+    if retry_after:
+        detail += HTTP_ERROR_RETRY_AFTER_FORMAT.format(value=retry_after)
+    return detail
+
 
 def handle_tool_errors(func: F) -> F:
     """
@@ -33,7 +59,7 @@ def handle_tool_errors(func: F) -> F:
         except ToolError:
             raise
         except Exception as e:
-            detail = str(e).strip() or type(e).__name__
+            detail = _describe_error(e)
             logger.error(f"Error in tool '{tool_name}': {detail}", exc_info=True)
             message = f"Error calling tool '{tool_name}': {detail}"
             raise ToolError(message) from e
