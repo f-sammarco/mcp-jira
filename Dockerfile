@@ -7,25 +7,20 @@ WORKDIR /app
 # Enable bytecode compilation
 ENV UV_COMPILE_BYTECODE=1
 
-# Copy from the cache instead of linking since it's a mounted volume
+# Copy from the cache instead of linking
 ENV UV_LINK_MODE=copy
 
-# Generate proper TOML lockfile first
-RUN --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    --mount=type=bind,source=README.md,target=README.md \
-    uv lock
+# Generate proper TOML lockfile first.
+# Plain COPY instead of `RUN --mount`: kaniko (cluster builds) does not support BuildKit mounts.
+COPY pyproject.toml README.md ./
+RUN uv lock
 
 # Install the project's dependencies using the lockfile
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    uv sync --frozen --extra wpad --no-install-project --no-dev --no-editable
+RUN uv sync --frozen --extra wpad --no-install-project --no-dev --no-editable
 
 # Then, copy the rest of the project source code and install it
 COPY . /app
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    uv sync --frozen --extra wpad --no-dev --no-editable
+RUN uv sync --frozen --extra wpad --no-dev --no-editable
 
 # Remove unnecessary files from the virtual environment before copying
 RUN find /app/.venv -name '__pycache__' -type d -exec rm -rf {} + && \
