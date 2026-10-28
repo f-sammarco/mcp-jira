@@ -39,6 +39,7 @@ class JiraClient:
     """Base client for Jira API interactions."""
 
     _field_ids_cache: list[dict[str, Any]] | None
+    _project_keys_cache: frozenset[str] | None
     _current_user_account_id: str | None
 
     config: JiraConfig
@@ -209,6 +210,7 @@ class JiraClient:
             disable_translation=self.config.disable_jira_markup_translation,
         )
         self._field_ids_cache = None
+        self._project_keys_cache = None
         self._current_user_account_id = None
 
         # Test authentication during initialization (in debug mode only)
@@ -285,6 +287,24 @@ class JiraClient:
         _ = self.config.url if hasattr(self, "config") else ""
         return self.preprocessor.clean_jira_text(text)
 
+    def _get_project_keys_for_linking(self) -> frozenset[str]:
+        """Return keys of visible projects, cached after the first success.
+
+        Failures yield an empty set (nothing gets linked) and are not cached.
+        """
+        if self._project_keys_cache is not None:
+            return self._project_keys_cache
+        try:
+            projects = self.jira.projects()
+        except Exception as e:
+            logger.warning(f"Could not load project keys for issue linking: {e}")
+            return frozenset()
+        project_keys = frozenset(
+            p["key"] for p in projects if isinstance(p, dict) and "key" in p
+        )
+        self._project_keys_cache = project_keys
+        return project_keys
+
     def _markdown_to_jira(self, markdown_text: str) -> str | dict[str, Any]:
         """Convert Markdown to Jira format (ADF for Cloud, wiki markup for Server).
 
@@ -299,7 +319,11 @@ class JiraClient:
 
         if self.config.is_cloud:
             try:
-                return markdown_to_adf(markdown_text, jira_base_url=self.config.url)
+                return markdown_to_adf(
+                    markdown_text,
+                    jira_base_url=self.config.url,
+                    project_keys=self._get_project_keys_for_linking(),
+                )
             except Exception as e:
                 logger.warning(f"Error converting markdown to ADF: {e}")
                 return {

@@ -442,6 +442,8 @@ class TestCommentsMixin:
 
     def test_markdown_to_jira_cloud_links_issue_keys(self, comments_mixin):
         """Cloud ADF links bare Jira issue keys to the configured Jira site."""
+        comments_mixin._project_keys_cache = None
+        comments_mixin.jira.projects.return_value = [{"key": "PROJ"}]
         result = comments_mixin._markdown_to_jira("Blocked by PROJ-123.")
         assert isinstance(result, dict)
         para = result["content"][0]
@@ -450,6 +452,25 @@ class TestCommentsMixin:
         assert (
             link_mark["attrs"]["href"] == "https://test.atlassian.net/browse/PROJ-123"
         )
+
+    def test_markdown_to_jira_cloud_skips_unknown_project_keys(self, comments_mixin):
+        """Keys of non-existent projects (e.g. AC-01) are not linked."""
+        comments_mixin._project_keys_cache = None
+        comments_mixin.jira.projects.return_value = [{"key": "PROJ"}]
+        result = comments_mixin._markdown_to_jira("See AC-01.")
+        para = result["content"][0]
+        assert all("marks" not in n for n in para["content"])
+
+    def test_markdown_to_jira_cloud_no_linking_when_projects_fail(
+        self, comments_mixin
+    ):
+        """Project lookup failure degrades to plain text and is not cached."""
+        comments_mixin._project_keys_cache = None
+        comments_mixin.jira.projects.side_effect = RuntimeError("boom")
+        result = comments_mixin._markdown_to_jira("See PROJ-1.")
+        para = result["content"][0]
+        assert all("marks" not in n for n in para["content"])
+        assert comments_mixin._project_keys_cache is None
 
     def test_markdown_to_jira_cloud_empty(self, comments_mixin):
         """Test _markdown_to_jira with empty text on Cloud returns ADF."""

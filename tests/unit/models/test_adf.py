@@ -557,6 +557,7 @@ class TestMarkdownToAdf:
         result = markdown_to_adf(
             f"Blocked by {issue_key}.",
             jira_base_url="https://jira.example.com/",
+            project_keys=frozenset({"PROJ", "B7"}),
         )
         para = result["content"][0]
         issue_node = next(n for n in para["content"] if issue_key in n.get("text", ""))
@@ -567,6 +568,18 @@ class TestMarkdownToAdf:
             )
         else:
             assert not link_marks
+
+    def test_issue_key_of_unknown_project_not_linked(self) -> None:
+        """Tags like AC-01 stay plain text when AC is not a project."""
+        result = markdown_to_adf(
+            "Check AC-01 and PROJ-1.",
+            jira_base_url="https://jira.example.com",
+            project_keys=frozenset({"PROJ"}),
+        )
+        nodes = result["content"][0]["content"]
+        linked = [n["text"] for n in nodes if n.get("marks")]
+        assert linked == ["PROJ-1"]
+        assert "".join(n["text"] for n in nodes) == "Check AC-01 and PROJ-1."
 
     # -- Code blocks --------------------------------------------------------
 
