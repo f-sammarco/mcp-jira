@@ -818,6 +818,15 @@ async def search(
 ) -> str:
     """Search Jira issues using JQL (Jira Query Language).
 
+    To list or take stock of a whole project (all its issues, its epics and their children, statuses, labels),
+    do not page this tool: use jira_get_project_graph, which answers that completely in one cached call. Use this
+    tool for a specific question (text, dates, assignee, fields the graph does not carry).
+
+    Paging on Jira Cloud: `start_at` is ignored (every page would be the first); go on with `page_token`, the
+    `next_page_token` of the previous answer, and stop when an answer has none (`total` can be -1: it is not a count).
+    In a listing do not ask for `parent` or `description`: `parent` comes back whole (about 2,000 characters per issue)
+    and a page of 50 would be cut. If an answer is cut anyway, repeat it with a lower `limit`.
+
     Args:
         ctx: The FastMCP context.
         jql: JQL query string.
@@ -1099,6 +1108,9 @@ async def get_project_issues(
 ) -> str:
     """Get all issues for a specific Jira project.
 
+    To take stock of a whole project, prefer jira_get_project_graph: it returns every epic and issue, compact and
+    complete, in one cached call, where this tool returns one page at a time.
+
     Args:
         ctx: The FastMCP context.
         project_key: The project key.
@@ -1114,6 +1126,144 @@ async def get_project_issues(
     )
     result = search_result.to_simplified_dict()
     return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+@jira_mcp.tool(
+    tags={"jira", "read", "toolset:jira_issues"},
+    annotations={"title": "Get Project Graph", "readOnlyHint": True},
+)
+async def get_project_graph(
+    ctx: Context,
+    project_key: Annotated[
+        str,
+        Field(
+            description="Jira project key (e.g., 'PROJ', 'ACV2')",
+            pattern=PROJECT_KEY_PATTERN,
+        ),
+    ],
+    view: Annotated[
+        str,
+        Field(
+            description=(
+                "'outline' (default): the epics with their child counts, no issues. "
+                "'issues': the issues that match the filters, as rows."
+            ),
+            default="outline",
+            pattern="^(outline|issues)$",
+        ),
+    ] = "outline",
+    epic_keys: Annotated[
+        str | None,
+        Field(
+            description=(
+                "(issues view) Comma-separated epic keys: only the epics and the "
+                "issues under them."
+            ),
+            default=None,
+        ),
+    ] = None,
+    query: Annotated[
+        str | None,
+        Field(
+            description=(
+                "(issues view) Comma-separated words or phrases, e.g. 'Badge, Hero Immagine, "
+                "TG-03': an issue matches when its key, summary, labels or components contain "
+                "ANY of them (case-insensitive). A phrase with spaces is matched whole, so "
+                "put a comma between alternatives."
+            ),
+            default=None,
+        ),
+    ] = None,
+    types: Annotated[
+        str | None,
+        Field(description="(issues view) Comma-separated issue types.", default=None),
+    ] = None,
+    statuses: Annotated[
+        str | None,
+        Field(
+            description=(
+                "(issues view) Comma-separated statuses or status categories "
+                "(To Do, In Progress, Done)."
+            ),
+            default=None,
+        ),
+    ] = None,
+    labels: Annotated[
+        str | None,
+        Field(description="(issues view) Comma-separated labels.", default=None),
+    ] = None,
+    include_links: Annotated[
+        bool,
+        Field(
+            description="(issues view) Add the issue links that touch the rows.",
+            default=False,
+        ),
+    ] = False,
+    limit: Annotated[
+        int,
+        Field(description="(issues view) Rows per call (1-1000).", default=200, ge=1),
+    ] = 200,
+    offset: Annotated[
+        int,
+        Field(
+            description="(issues view) First row; use next_offset to continue.",
+            default=0,
+            ge=0,
+        ),
+    ] = 0,
+    refresh: Annotated[
+        bool,
+        Field(
+            description="Walk the whole project again instead of using the cache.",
+            default=False,
+        ),
+    ] = False,
+) -> str:
+    """The whole project in one call: every epic and issue, complete, compact, cached.
+
+    Use this INSTEAD OF paging jira_search through a project. The server walks the
+    project once (in parallel, then keeps it up to date) and answers every question from
+    that snapshot, so the answer is always complete: `total_issues` is the whole project and
+    `matched` is how many rows satisfy the filters. Start with view='outline' (epics and
+    their sizes), then ask for view='issues' narrowed by epic_keys, query words, types,
+    statuses or labels; one call can carry several words and several epics, so do not ask
+    one question per call. Rows are [key, type, status, summary, parent, labels]. Use
+    jira_get_issue only for the full text of the few issues you must read.
+
+    Args:
+        ctx: The FastMCP context.
+        project_key: The project key.
+        view: 'outline' or 'issues'.
+        epic_keys: Comma-separated epic keys to restrict to.
+        query: Comma-separated words, any of which may match.
+        types: Comma-separated issue types.
+        statuses: Comma-separated statuses or status categories.
+        labels: Comma-separated labels.
+        include_links: Include the issue links that touch the returned rows.
+        limit: Rows per call.
+        offset: First row.
+        refresh: Force a full walk of the project.
+
+    Returns:
+        JSON string: freshness (`as_of`, `source`), `complete`, counts, the epics or the
+        matching rows, and `next_offset` when there are more.
+    """
+    jira = await get_jira_fetcher(ctx)
+    result = await run_jira_fetcher_call(
+        jira.get_project_graph,
+        project_key=project_key,
+        view=view,
+        epic_keys=epic_keys,
+        query=query,
+        types=types,
+        statuses=statuses,
+        labels=labels,
+        include_links=include_links,
+        limit=limit,
+        offset=offset,
+        refresh=refresh,
+    )
+    return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
 
 @jira_mcp.tool(
